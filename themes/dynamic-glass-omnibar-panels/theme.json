@@ -4,7 +4,7 @@
   "description": "A premium, 100% adaptive glassmorphic theme that blends Zen Browser's OmniBar and extensions panel beautifully with your active theme colors.",
   "author": "Doruk Murat Kıno",
   "version": "1.0.0",
-  "type": "theme",
+  "type": "style",
   "readme": "README.md",
   "theme": "theme.css",
   "image": "preview.png",
