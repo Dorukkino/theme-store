@@ -323,7 +323,7 @@
     },
     "image": "https://i.imgur.com/FyzTFKg.png",
     "author": "ZapSNH",
-    "version": "151.0.2",
+    "version": "152.1.0",
     "tags": [
       "firefox",
       "photon",
@@ -331,14 +331,15 @@
       "square"
     ],
     "createdAt": "2023-08-09",
-    "updatedAt": "2026-06-05",
+    "updatedAt": "2026-06-22",
     "fork": [
       "firefox",
       "waterfox",
       "floorp",
       "mullvad"
     ],
-    "stars": 149
+    "stars": 149,
+    "commit": "edf4de75e552e01229646959271d531896f98c57"
   },
   "macaron": {
     "id": "macaron",
