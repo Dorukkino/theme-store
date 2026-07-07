@@ -1,0 +1,361 @@
+name: Add Theme
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  addThemePR:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    name: Add a theme
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.issue.title, '[add-theme]:')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Debug GITHUB_TOKEN permissions
+        run: |
+          echo "DEBUG: Checking GITHUB_TOKEN presence"
+          if [ -z "${{ secrets.GITHUB_TOKEN }}" ]; then
+            echo "ERROR: GITHUB_TOKEN is not set"
+          else
+            echo "DEBUG: GITHUB_TOKEN is set (length: ${#GITHUB_TOKEN})"
+            curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 https://api.github.com/rate_limit | jq '.resources | { core: .core, pull_requests: .pulls }'
+          fi
+
+      - name: Verify close-issue version
+        run: |
+          echo "DEBUG: Checking available releases for peter-evans/close-issue"
+          curl -s -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/peter-evans/close-issue/releases | jq '[.[] | {tag_name: .tag_name, published_at: .published_at}]'
+          echo "DEBUG: Using peter-evans/close-issue@v3 (latest stable version)"
+
+      - name: Parse issue
+        id: issue-parser
+        uses: stefanbuck/github-issue-parser@v3
+        with:
+          template-path: .github/ISSUE_TEMPLATE/add-theme.yml
+
+      - name: Export parsed payload into variables
+        id: export
+        run: |
+          homepage="${{ fromJson(steps.issue-parser.outputs.jsonString)['homepage'] }}"
+        
+          echo "THEME_HOMEPAGE=$homepage" >> $GITHUB_ENV
+
+          pattern='^https?://(www\.)?github\.com/([^/]+)/([^/]+)(/tree/([^/]+)(/(.*))?)?$'
+          
+          if [[ ! "$homepage" =~ $pattern ]]; then
+            echo "Error: Invalid GitHub repository URL" >&2
+            exit 1
+          fi
+          
+          owner="${BASH_REMATCH[2]}"
+          repo="${BASH_REMATCH[3]}"
+          branch="${BASH_REMATCH[5]:-main}"
+          folder="${BASH_REMATCH[7]:-}"
+          
+          raw_url="https://raw.githubusercontent.com/$owner/$repo/$branch"
+          [[ -n "$folder" ]] && raw_url="$raw_url/$folder"
+          
+          theme_json_url="$raw_url/theme.json"
+          
+          echo "$theme_json_url"
+
+          echo "THEME_JSON=$theme_json_url" >> $GITHUB_ENV
+
+      - name: Create existing theme check script
+        run: |
+          cat << 'EOF' > check_existing.py
+          import json
+          import re
+          import urllib.request
+          import sys
+
+          def get_theme_id(homepage):
+              theme_json_url = "${{ env.THEME_JSON }}"
+
+              try:
+                  with urllib.request.urlopen(theme_json_url) as response:
+                      theme_data = json.loads(response.read().decode())
+              except urllib.error.HTTPError as e:
+                  print(f"Error: Failed to fetch theme.json: HTTP {e.code} {e.reason}", file=sys.stderr)
+                  raise ValueError(f"Failed to fetch theme.json: HTTP {e.code} {e.reason}")
+              except urllib.error.URLError as e:
+                  print(f"Error: Failed to fetch theme.json: {str(e)}", file=sys.stderr)
+                  raise ValueError(f"Failed to fetch theme.json: {str(e)}")
+              except json.JSONDecodeError as e:
+                  print(f"Error: Invalid JSON in theme.json: {str(e)}", file=sys.stderr)
+                  raise ValueError(f"Invalid JSON in theme.json: {str(e)}")
+              
+              theme_id = theme_data.get("id")
+              if not theme_id:
+                  print("Error: theme.json must contain 'id' property", file=sys.stderr)
+                  raise ValueError("theme.json must contain 'id' property")
+              return theme_id
+
+          def check_existing_theme(theme_id):
+              try:
+                  with open("marketplace.json", "r") as f:
+                      data = json.load(f)
+              except Exception as e:
+                  print(f"Error: Failed to read marketplace.json: {str(e)}", file=sys.stderr)
+                  raise ValueError(f"Failed to read marketplace.json: {str(e)}")
+              
+              if theme_id in data:
+                  return f"Theme with ID '{theme_id}' is already included in the marketplace"
+              return None
+
+          if __name__ == "__main__":
+              try:
+                  theme_id = get_theme_id("${{ env.THEME_HOMEPAGE }}")
+                  existing_message = check_existing_theme(theme_id)
+                  if existing_message:
+                      print(f"EXISTING_FOUND={existing_message}")
+                  else:
+                      print("No existing theme found")
+              except ValueError as e:
+                  print(f"Error: {str(e)}", file=sys.stderr)
+                  sys.exit(1)
+              except Exception as e:
+                  print(f"Error: Unexpected error: {str(e)}", file=sys.stderr)
+                  sys.exit(1)
+          EOF
+
+      - name: Run existing theme check
+        run: |
+          python check_existing.py > existing_output.txt 2> error.log
+          if [ $? -ne 0 ]; then
+            echo "EXISTING_CHECK_FAILED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Capture existing theme output
+        run: |
+          EXISTING_OUTPUT=$(cat existing_output.txt 2>/dev/null | grep -v "DEBUG:" || echo "No output available")
+          ERROR_LOG=$(cat error.log 2>/dev/null | grep -v "DEBUG:" || echo "No error details available")
+          if grep -q "EXISTING_FOUND=" existing_output.txt; then
+            echo "EXISTING_FOUND=true" >> $GITHUB_ENV
+            echo "EXISTING_MESSAGE=$EXISTING_OUTPUT" >> $GITHUB_ENV
+          elif [ "$EXISTING_CHECK_FAILED" = "true" ]; then
+            ERROR_LOG_SANITIZED=$(echo "$ERROR_LOG" | tr -d '\n\r' | sed 's/[^a-zA-Z0-9:._-]/ /g')
+            echo "EXISTING_MESSAGE=Error processing theme: $ERROR_LOG_SANITIZED" >> $GITHUB_ENV
+          else
+            echo "EXISTING_MESSAGE=No existing theme found" >> $GITHUB_ENV
+          fi
+
+      - name: Close issue for existing theme
+        uses: peter-evans/close-issue@v3
+        if: env.EXISTING_FOUND == 'true' && env.EXISTING_CHECK_FAILED == 'true'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          comment: |
+            # Theme already exists
+
+            Sorry, there was an issue processing your theme submission:
+
+            > ${{ env.EXISTING_MESSAGE }}
+
+            This may be because the theme is already included in the marketplace. Please check the marketplace in marketplace.json, verify your homepage URL is in the format 'https://github.com/owner/repo', and ensure your theme.json contains a valid 'id' property. If you believe this is an error, contact the maintainers or review the workflow logs.
+
+      - name: Create update script
+        run: |
+          cat << 'EOF' > update_marketplace.py
+          import json
+          import re
+          import urllib.request
+          import sys
+          import os
+
+          def get_repo_info(homepage):
+              theme_json_url = "${{ env.THEME_JSON }}"
+          
+              try:
+                  with urllib.request.urlopen(theme_json_url) as response:
+                      theme_data = json.loads(response.read().decode())
+              except urllib.error.HTTPError as e:
+                  print(
+                      f"Error: Failed to fetch theme.json from branch '{branch}' folder '{folder}': "
+                      f"HTTP {e.code} {e.reason}",
+                      file=sys.stderr
+                  )
+                  raise ValueError(
+                      f"Failed to fetch theme.json from branch '{branch}' folder '{folder}'"
+                  )
+              except urllib.error.URLError as e:
+                  print(f"Error: Failed to fetch theme.json: {str(e)}", file=sys.stderr)
+                  raise ValueError(f"Failed to fetch theme.json: {str(e)}")
+              except json.JSONDecodeError as e:
+                  print(f"Error: Invalid JSON in theme.json: {str(e)}", file=sys.stderr)
+                  raise ValueError(f"Invalid JSON in theme.json: {str(e)}")
+          
+              theme_id = theme_data.get("id")
+              if not theme_id:
+                  print("Error: theme.json must contain 'id' property", file=sys.stderr)
+                  raise ValueError("theme.json must contain 'id' property")
+          
+              return theme_data
+
+          def update_marketplace():
+              marketplace_file = "marketplace.json"
+              os.makedirs("data", exist_ok=True)
+              
+              try:
+                  with open(marketplace_file, "r") as f:
+                      data = json.load(f)
+              except FileNotFoundError:
+                  data = {}
+              except Exception as e:
+                  print(f"Error: Failed to read {marketplace_file}: {str(e)}", file=sys.stderr)
+                  raise ValueError(f"Failed to read {marketplace_file}: {str(e)}")
+              
+              homepage = "${{ env.THEME_HOMEPAGE }}"
+              theme_data = get_repo_info(homepage)
+
+              theme_id = theme_data["id"]
+              data[theme_id] = theme_data
+
+              github_env = os.environ.get("GITHUB_ENV")
+              with open(github_env, "a") as f:
+                  f.write(f"THEME_AUTHOR={theme_data['author']}\n")
+                  f.write(f"THEME_NAME={theme_data['name']}\n")
+                  f.write(f"THEME_ID={theme_id}\n")
+              
+              with open(marketplace_file, "w") as f:
+                  json.dump(data, f, indent=2)
+
+          if __name__ == "__main__":
+              try:
+                  update_marketplace()
+              except ValueError as e:
+                  print(f"Error: {str(e)}", file=sys.stderr)
+                  sys.exit(1)
+              except Exception as e:
+                  print(f"Error: Unexpected error: {str(e)}", file=sys.stderr)
+                  sys.exit(1)
+          EOF
+
+      - name: Run update script
+        if: env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        run: |
+          python update_marketplace.py > update_output.txt 2> error.log
+          if [ $? -ne 0 ]; then
+            echo "UPDATE_FAILED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Export error output
+        if: failure() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        run: |
+          if [ -f error.log ]; then
+            cat error.log
+            ERROR_LOG=$(cat error.log 2>/dev/null | grep -v "DEBUG:" || echo "No error details available")
+            echo "ERROR_OUTPUT=$ERROR_LOG" >> $GITHUB_ENV
+          else
+            echo "DEBUG: error.log not found"
+            echo "ERROR_OUTPUT=Unknown error occurred, please check workflow logs" >> $GITHUB_ENV
+          fi
+
+      - name: Show error message
+        if: failure() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        uses: peter-evans/close-issue@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          comment: |
+            # Error adding theme
+
+            Sorry, there was an error processing your theme submission:
+
+            > ${{ env.ERROR_OUTPUT || 'Unknown error occurred, please check workflow logs' }}
+
+            Please verify your homepage URL is in the format 'https://github.com/owner/repo' and your theme.json contains a valid 'id' property. If you believe this is an error, contact the maintainers or review the workflow logs.
+
+      - name: Setup Git
+        if: success() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create Pull Request
+        if: success() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          add-paths: |
+            marketplace.json
+            mods/
+          labels: staged
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Add theme: ${{ env.THEME_NAME }}"
+          delete-branch: true
+          title: "Add theme: ${{ env.THEME_NAME }}"
+          body: |
+            # Add theme: ${{ env.THEME_NAME }}
+
+            This PR adds a new theme to the marketplace.
+
+            ## Theme Details
+            * **Name**: ${{ env.THEME_NAME }}
+            * **Homepage**: ${{ env.THEME_HOMEPAGE }}
+            * **Author**: @${{ env.THEME_AUTHOR }}
+          branch: mod/${{ env.THEME_ID }}
+          base: main
+
+      - name: Debug Comment Issue
+        if: success() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        run: |
+          echo "DEBUG: Preparing to comment on issue"
+          echo "DEBUG: THEME_NAME=${{ env.THEME_NAME }}"
+          echo "DEBUG: GITHUB_TOKEN length=${#GITHUB_TOKEN}"
+          echo "DEBUG: Comment content:"
+          echo "# Thank you for your contribution! :tada:"
+          echo "Your theme \"${{ env.THEME_NAME }}\" has been successfully submitted. The maintainers will review it and get back to you soon."
+          echo "Here are some details about your submission:"
+          echo "* Your theme has been requested into a new pull request."
+          echo "* It has been created in the branch [mod/${{ env.THEME_ID }}](https://github.com/${{ github.repository }}/tree/mod/${{ env.THEME_ID }})."
+
+      - name: Comment on Issue
+        if: success() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "{\"body\": \"# Thank you for your contribution! :tada:\n\nYour theme \\\"${{ env.THEME_NAME }}\\\" has been successfully submitted. The maintainers will review it and get back to you soon.\n\nHere are some details about your submission:\n* Your theme has been requested into a new pull request.\n* It has been created in the branch [mod/${{ env.THEME_ID }}](https://github.com/${{ github.repository }}/tree/mod/${{ env.THEME_ID }}).\"}" \
+            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments > comment_response.txt
+          if [ $? -eq 0 ]; then
+            echo "DEBUG: Comment posted successfully"
+            cat comment_response.txt
+          else
+            echo "ERROR: Failed to post comment"
+            cat comment_response.txt
+            echo "FALLBACK_MESSAGE=Failed to post success comment. Your theme '${{ env.THEME_NAME }}' was submitted, and a pull request was created. Please check the repository for details." >> $GITHUB_ENV
+          fi
+
+      - name: Fallback Comment on Issue
+        if: success() && env.FALLBACK_MESSAGE != ''
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "{\"body\": \"${{ env.FALLBACK_MESSAGE }}\"}" \
+            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments > fallback_comment_response.txt
+          if [ $? -eq 0 ]; then
+            echo "DEBUG: Fallback comment posted successfully"
+            cat fallback_comment_response.txt
+          else
+            echo "ERROR: Failed to post fallback comment"
+            cat fallback_comment_response.txt
+          fi
+
+      - name: Close Issue
+        if: success() && env.EXISTING_FOUND != 'true' && env.EXISTING_CHECK_FAILED != 'true'
+        uses: peter-evans/close-issue@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
