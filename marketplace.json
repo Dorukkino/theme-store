@@ -886,7 +886,7 @@
     },
     "preferences": "preferences.json",
     "author": "Vertex",
-    "version": "4.0.10",
+    "version": "4.0.12",
     "tags": [
       "sine",
       "fx-autoconfig",
@@ -900,7 +900,7 @@
       "zen"
     ],
     "stars": 20,
-    "commit": "0688ab5fcd4c2cc9dec068613467daf793e63bf8"
+    "commit": "d61bf63e3a011af581b8bf3d2e9002365f9cc76c"
   },
   "blended-addressbar": {
     "id": "blended-addressbar",
