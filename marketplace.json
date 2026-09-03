@@ -265,6 +265,11 @@
         "include": [
           "chrome://browser/content/browser.xhtml"
         ]
+      },
+      "arc-media-cover.uc.js": {
+        "include": [
+          "chrome://browser/content/browser.xhtml"
+        ]
       }
     },
     "preferences": "preferences.json",
@@ -280,7 +285,7 @@
       "zen"
     ],
     "stars": 419,
-    "commit": "6d8041bfdf69299ae6fbf7d235610ece05c40626"
+    "commit": "9c6ba1bb8dc631dcc8c005edab2dde1d17ec26af"
   },
   "advanced-tab-groups": {
     "id": "advanced-tab-groups",
