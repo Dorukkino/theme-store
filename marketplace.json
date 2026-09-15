@@ -453,13 +453,13 @@
       "Icon Pack"
     ],
     "createdAt": "2025-06-02",
-    "updatedAt": "2026-09-13",
+    "updatedAt": "2026-09-14",
     "fork": [
       "zen",
       "firefox"
     ],
     "stars": 61,
-    "commit": "8951f2b2db011ad977c9d159903810495f3c3939"
+    "commit": "f56369ef1ff6bb52c3683ddc1806a5fb556c4dfc"
   },
   "quick-search-zen-browser": {
     "id": "quick-search-zen-browser",
